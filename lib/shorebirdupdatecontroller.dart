@@ -1,41 +1,35 @@
 import 'dart:async';
 
+import 'package:flutter/material.dart';
 import 'package:get/get.dart';
-import 'package:restart_app/restart_app.dart';
 import 'package:shorebird_code_push/shorebird_code_push.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class ShorebirdUpdateController extends GetxController {
+  /// Constants
+  static const _ackKey = 'shorebird_patch_acknowledged';
+  static const _checkInterval = Duration(seconds: 5);
+  static const _snackbarDuration = Duration(seconds: 2);
+
+  /// Services
   final ShorebirdUpdater _updater = ShorebirdUpdater();
 
+  /// Timer
   Timer? _timer;
 
+  /// Observable states
   final Rx<UpdateStatus> status = UpdateStatus.upToDate.obs;
   final RxBool bannerVisible = false.obs;
   final RxBool checking = false.obs;
   final RxString error = ''.obs;
-
-  /// UI signal (observed in UI)
   final RxBool showUpdatedSnackbar = false.obs;
-
-  /// One-time acknowledgment per patch
-  static const _ackKey = 'shorebird_patch_acknowledged';
 
   @override
   void onInit() {
     super.onInit();
-
-    /// Runs once after every app launch
     _handlePostRestart();
-
-    /// Initial check
     checkForUpdate();
-
-    /// Periodic check (optional)
-    _timer = Timer.periodic(
-      const Duration(seconds: 5),
-      (_) => checkForUpdate(),
-    );
+    _startPeriodicCheck();
   }
 
   @override
@@ -44,25 +38,21 @@ class ShorebirdUpdateController extends GetxController {
     super.onClose();
   }
 
+  /// Start periodic update checks
+  void _startPeriodicCheck() {
+    _timer = Timer.periodic(_checkInterval, (_) => checkForUpdate());
+  }
+
   Future<void> checkForUpdate() async {
     if (checking.value) return;
 
+    checking.value = true;
     try {
-      checking.value = true;
-
       final result = await _updater.checkForUpdate();
       status.value = result;
 
-      /// ✅ Correct signal: patch downloaded & waiting
       if (result == UpdateStatus.restartRequired) {
-        bannerVisible.value = true;
-
-        /// Stop polling once restart is required
-        _timer?.cancel();
-
-        /// Allow snackbar to show again AFTER restart
-        final prefs = await SharedPreferences.getInstance();
-        await prefs.setBool(_ackKey, false);
+        await _handleRestartRequired();
       }
     } catch (e) {
       error.value = e.toString();
@@ -71,28 +61,36 @@ class ShorebirdUpdateController extends GetxController {
     }
   }
 
-  /// ✅ SAFE restart (Shorebird-compatible, Play Store safe)
-  void restartApp() {
-    Restart.restartApp();
+  /// Handle actions when restart is required
+  Future<void> _handleRestartRequired() async {
+    bannerVisible.value = true;
+    _timer?.cancel();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_ackKey, false);
   }
 
-  void dismissBanner() {
-    bannerVisible.value = false;
-  }
-
-  /// 🔑 Runs ONCE per applied patch
+  /// Handle post-restart: show snackbar if patch was applied
   Future<void> _handlePostRestart() async {
     final prefs = await SharedPreferences.getInstance();
-    final alreadyAcked = prefs.getBool(_ackKey) ?? false;
-
-    if (alreadyAcked) return;
+    if (prefs.getBool(_ackKey) ?? false) return;
 
     final result = await _updater.checkForUpdate();
-
-    /// Patch successfully applied
     if (result == UpdateStatus.upToDate) {
       showUpdatedSnackbar.value = true;
       await prefs.setBool(_ackKey, true);
     }
+  }
+
+  /// Show snackbar for successful update
+  void showUpdateSnackbar() {
+    Get.snackbar(
+      'Updated',
+      'App has been updated successfully!',
+      colorText: Colors.white,
+      backgroundColor: Colors.green.withValues(alpha: 0.9),
+      snackPosition: SnackPosition.TOP,
+      duration: _snackbarDuration,
+    );
+    showUpdatedSnackbar.value = false;
   }
 }
